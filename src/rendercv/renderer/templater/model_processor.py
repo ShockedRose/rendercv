@@ -1,14 +1,63 @@
+import pathlib
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections.abc import Callable
 from typing import Literal
 
+from rendercv.exception import RenderCVUserError
 from rendercv.schema.models.cv.section import Entry
 from rendercv.schema.models.rendercv_model import RenderCVModel
 
 from .connections import compute_connections
+from .date import build_date_placeholders, date_object_to_string
 from .entry_templates_from_input import render_entry_templates
 from .footer_and_top_note import render_footer_template, render_top_note_template
 from .markdown_parser import markdown_to_typst
-from .string_processor import apply_string_processors, make_keywords_bold
+from .string_processor import (
+    apply_string_processors,
+    make_keywords_bold,
+    substitute_placeholders,
+)
+
+
+def download_photo_from_url(rendercv_model: RenderCVModel) -> None:
+    """Download photo from URL to output directory and update model to local path.
+
+    Why:
+        Templates and Typst compiler require cv.photo to be a local pathlib.Path.
+        When user provides a URL, this downloads the image before template
+        rendering, preserving the local-path invariant for all downstream code.
+
+    Args:
+        rendercv_model: CV model whose photo URL will be downloaded in-place.
+    """
+    if rendercv_model.cv.photo is None or isinstance(
+        rendercv_model.cv.photo, pathlib.Path
+    ):
+        return
+
+    url_str = str(rendercv_model.cv.photo)
+
+    parsed = urllib.parse.urlparse(url_str)
+    filename = pathlib.PurePosixPath(parsed.path).name
+    if not filename or "." not in filename:
+        filename = "photo.jpg"
+
+    output_dir = rendercv_model.settings.render_command.output_folder
+    output_dir.mkdir(parents=True, exist_ok=True)
+    destination = output_dir / filename
+
+    if not destination.exists():
+        try:
+            with urllib.request.urlopen(url_str, timeout=30) as response:
+                destination.write_bytes(response.read())
+        except (urllib.error.URLError, OSError) as e:
+            raise RenderCVUserError(
+                message=f"Failed to download photo from {url_str}: {e}"
+            ) from e
+
+    rendercv_model.cv.photo = destination
 
 
 def process_model(
@@ -36,31 +85,47 @@ def process_model(
     if file_type == "typst":
         string_processors.extend([markdown_to_typst])
 
-    rendercv_model.cv.plain_name = rendercv_model.cv.name  # ty: ignore[unresolved-attribute]
+    rendercv_model.cv._plain_name = rendercv_model.cv.name
     rendercv_model.cv.name = apply_string_processors(
         rendercv_model.cv.name, string_processors
     )
     rendercv_model.cv.headline = apply_string_processors(
         rendercv_model.cv.headline, string_processors
     )
-    rendercv_model.cv.connections = compute_connections(rendercv_model, file_type)  # ty: ignore[unresolved-attribute]
-    rendercv_model.cv.top_note = render_top_note_template(  # ty: ignore[unresolved-attribute]
+    rendercv_model.cv._connections = compute_connections(rendercv_model, file_type)
+    rendercv_model.cv._top_note = render_top_note_template(
         rendercv_model.design.templates.top_note,
         locale=rendercv_model.locale,
-        current_date=rendercv_model.settings.current_date,
+        current_date=rendercv_model.settings._resolved_current_date,
         name=rendercv_model.cv.name,
         single_date_template=rendercv_model.design.templates.single_date,
         string_processors=string_processors,
     )
 
-    rendercv_model.cv.footer = render_footer_template(  # ty: ignore[unresolved-attribute]
+    rendercv_model.cv._footer = render_footer_template(
         rendercv_model.design.templates.footer,
         locale=rendercv_model.locale,
-        current_date=rendercv_model.settings.current_date,
+        current_date=rendercv_model.settings._resolved_current_date,
         name=rendercv_model.cv.name,
         single_date_template=rendercv_model.design.templates.single_date,
         string_processors=string_processors,
     )
+
+    pdf_title_placeholders: dict[str, str] = {
+        "CURRENT_DATE": date_object_to_string(
+            rendercv_model.settings._resolved_current_date,
+            locale=rendercv_model.locale,
+            single_date_template=rendercv_model.design.templates.single_date,
+        ),
+        "NAME": rendercv_model.cv._plain_name or "",
+        **build_date_placeholders(
+            rendercv_model.settings._resolved_current_date, locale=rendercv_model.locale
+        ),
+    }
+    rendercv_model.settings.pdf_title = substitute_placeholders(
+        rendercv_model.settings.pdf_title, pdf_title_placeholders
+    )
+
     if rendercv_model.cv.sections is None:
         return rendercv_model
 
@@ -71,14 +136,14 @@ def process_model(
             in rendercv_model.design.sections.show_time_spans_in
         )
         for i, entry in enumerate(section.entries):
-            entry = render_entry_templates(  # NOQA: PLW2901
+            processed_entry = render_entry_templates(
                 entry,
                 templates=rendercv_model.design.templates,
                 locale=rendercv_model.locale,
                 show_time_span=show_time_span,
-                current_date=rendercv_model.settings.current_date,
+                current_date=rendercv_model.settings._resolved_current_date,
             )
-            section.entries[i] = process_fields(entry, string_processors)
+            section.entries[i] = process_fields(processed_entry, string_processors)
 
     return rendercv_model
 

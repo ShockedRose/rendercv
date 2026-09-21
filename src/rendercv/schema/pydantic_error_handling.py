@@ -5,7 +5,13 @@ import pydantic
 import pydantic_core
 from ruamel.yaml.comments import CommentedMap
 
-from rendercv.exception import RenderCVInternalError, RenderCVValidationError
+from rendercv.exception import (
+    OVERLAY_SOURCE_TO_YAML_SOURCE,
+    OverlaySourceKey,
+    RenderCVInternalError,
+    RenderCVValidationError,
+    YamlSource,
+)
 
 from .models.custom_error_types import CustomPydanticErrorTypes
 from .yaml_reader import read_yaml
@@ -22,24 +28,21 @@ unwanted_locations = (
     "int",
     "str",
     "constrained-str",
-    "function-after",
+    "function-",
 )
 
 
 def parse_plain_pydantic_error(
     plain_error: pydantic_core.ErrorDetails,
     input_dictionary: CommentedMap | dict[str, Any],
+    overlay_sources: dict[str, CommentedMap] | None = None,
 ) -> RenderCVValidationError:
     """Transform raw Pydantic error into user-friendly validation error with YAML coordinates.
-
-    Why:
-        Pydantic errors contain technical jargon and generic locations unsuitable
-        for end users. This converts them to plain English messages with exact
-        YAML line numbers, mapped via error_dictionary.yaml.
 
     Args:
         plain_error: Raw Pydantic validation error.
         input_dictionary: YAML dict with line/column metadata.
+        overlay_sources: Per-section CommentedMaps from overlays (for correct coordinates).
 
     Returns:
         Structured error with location tuple, friendly message, and YAML coordinates.
@@ -65,10 +68,22 @@ def parse_plain_pydantic_error(
     )
     # Special case for end_date because Pydantic returns multiple end_date errors
     # since it has multiple valid formats:
-    if "end_date" in location[-1]:
+    if location and "end_date" in location[-1]:
         plain_error["msg"] = (
             "This is not a valid `end_date`! Please use either YYYY-MM-DD, YYYY-MM,"
             ' or YYYY format or "present"!'
+        )
+
+    # Special case for current_date: the field is typed as datetime.date |
+    # Literal["today"]. Pydantic appends "date" to the loc for the datetime.date
+    # union branch (e.g. ("settings", "current_date", "date")). Strip that suffix
+    # first so the field name lands at location[-1], matching the end_date pattern.
+    if len(location) >= 2 and location[-1] == "date" and location[-2] == "current_date":
+        location = location[:-1]
+    if location and "current_date" in location[-1]:
+        plain_error["msg"] = (
+            "This is not a valid `current_date`! Please use YYYY-MM-DD format or"
+            ' "today".'
         )
 
     for old_error_message, new_error_message in error_dictionary.items():
@@ -79,21 +94,35 @@ def parse_plain_pydantic_error(
     if not plain_error["msg"].endswith("."):
         plain_error["msg"] += "."
 
+    # Determine which YAML source this error came from and use the correct
+    # CommentedMap for coordinate lookup
+    yaml_source: YamlSource = "main_yaml_file"
+    coord_dict: CommentedMap | dict[str, Any] = input_dictionary
+    if overlay_sources and location and location[0] in overlay_sources:
+        source_key = cast(OverlaySourceKey, location[0])
+        yaml_source = OVERLAY_SOURCE_TO_YAML_SOURCE[source_key]
+        coord_dict = overlay_sources[source_key]
+
+    location_for_coords = (
+        location if plain_error["type"] != "missing" else location[:-1]
+    )
+
     return RenderCVValidationError(
-        location=location,
+        schema_location=location,
+        yaml_location=(
+            get_coordinates_of_a_key_in_a_yaml_object(
+                coord_dict,
+                location_for_coords,
+            )
+            if isinstance(coord_dict, CommentedMap)
+            else None
+        ),
+        yaml_source=yaml_source,
         message=plain_error["msg"],
         input=(
             str(plain_error["input"])
             if not isinstance(plain_error["input"], dict | list)
             else "..."
-        ),
-        yaml_location=(
-            get_coordinates_of_a_key_in_a_yaml_object(
-                input_dictionary,
-                location if plain_error["type"] != "missing" else location[:-1],
-            )
-            if isinstance(input_dictionary, CommentedMap)
-            else None
         ),
     )
 
@@ -101,18 +130,14 @@ def parse_plain_pydantic_error(
 def parse_validation_errors(
     exception: pydantic.ValidationError,
     input_dictionary: CommentedMap | dict[str, Any],
+    overlay_sources: dict[str, CommentedMap] | None = None,
 ) -> list[RenderCVValidationError]:
     """Extract all validation errors from Pydantic exception with deduplication.
-
-    Why:
-        Single Pydantic ValidationError contains multiple sub-errors. Entry
-        validation errors include nested causes that must be flattened and
-        deduplicated before display. This aggregates all errors into a single
-        list for table rendering.
 
     Args:
         exception: Pydantic validation exception.
         input_dictionary: YAML dict with location metadata.
+        overlay_sources: Per-section CommentedMaps from overlays (for correct coordinates).
 
     Returns:
         Deduplicated list of user-friendly validation errors.
@@ -122,26 +147,30 @@ def parse_validation_errors(
 
     for plain_error in all_plain_errors:
         all_final_errors.append(
-            parse_plain_pydantic_error(plain_error, input_dictionary)
+            parse_plain_pydantic_error(plain_error, input_dictionary, overlay_sources)
         )
 
         if plain_error["type"] == CustomPydanticErrorTypes.entry_validation.value:
-            assert "ctx" in plain_error
-            assert "caused_by" in plain_error["ctx"]
+            if "ctx" not in plain_error or "caused_by" not in plain_error["ctx"]:
+                raise RenderCVInternalError(
+                    "entry_validation error missing ctx or caused_by"
+                )
             for plain_cause_error in plain_error["ctx"]["caused_by"]:
                 loc = plain_cause_error["loc"][1:]  # Omit `entries` location
                 plain_cause_error["loc"] = plain_error["loc"] + loc
                 all_final_errors.append(
-                    parse_plain_pydantic_error(plain_cause_error, input_dictionary)
+                    parse_plain_pydantic_error(
+                        plain_cause_error, input_dictionary, overlay_sources
+                    )
                 )
 
     # Remove duplicates from all_final_errors:
     error_locations = set()
     errors_without_duplicates = []
     for error in all_final_errors:
-        location = error.location
-        if location not in error_locations:
-            error_locations.add(location)
+        schema_location = error.schema_location
+        if schema_location not in error_locations:
+            error_locations.add(schema_location)
             errors_without_duplicates.append(error)
 
     return errors_without_duplicates

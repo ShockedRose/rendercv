@@ -39,7 +39,9 @@ def apply_string_processors(
 
 
 @functools.lru_cache(maxsize=64)
-def build_keyword_matcher_pattern(keywords: frozenset[str]) -> re.Pattern:
+def build_keyword_matcher_pattern(
+    keywords: frozenset[str], word_boundary: bool = False
+) -> re.Pattern:
     """Build cached regex pattern for matching keywords with longest-first priority.
 
     Why:
@@ -49,6 +51,8 @@ def build_keyword_matcher_pattern(keywords: frozenset[str]) -> re.Pattern:
 
     Args:
         keywords: Set of keywords to match.
+        word_boundary: When True, add \\b word boundaries so only whole-word
+            matches are found.
 
     Returns:
         Compiled regex pattern.
@@ -57,9 +61,23 @@ def build_keyword_matcher_pattern(keywords: frozenset[str]) -> re.Pattern:
         message = "Keywords cannot be empty"
         raise RenderCVInternalError(message)
 
-    escaped: list[str] = [re.escape(k) for k in keywords]
-    escaped.sort(key=len, reverse=True)
-    pattern = "(" + "|".join(escaped) + ")"
+    if word_boundary:
+        parts: list[str] = []
+        for k in keywords:
+            esc = re.escape(k)
+            # Only add \b on sides where the keyword character is a word
+            # character (\w). Non-word characters like ":" or "+" have no
+            # word boundary to match against adjacent spaces.
+            prefix = r"\b" if re.match(r"\w", k[0]) else ""
+            suffix = r"\b" if re.match(r"\w", k[-1]) else ""
+            parts.append(f"{prefix}{esc}{suffix}")
+        parts.sort(key=len, reverse=True)
+        pattern = "(" + "|".join(parts) + ")"
+    else:
+        escaped: list[str] = [re.escape(k) for k in keywords]
+        escaped.sort(key=len, reverse=True)
+        pattern = "(" + "|".join(escaped) + ")"
+
     return re.compile(pattern)
 
 
@@ -87,7 +105,7 @@ def make_keywords_bold(string: str, keywords: list[str]) -> str:
     if not keywords:
         return string
 
-    pattern = build_keyword_matcher_pattern(frozenset(keywords))
+    pattern = build_keyword_matcher_pattern(frozenset(keywords), word_boundary=True)
     return pattern.sub(lambda m: f"**{m.group(0)}**", string)
 
 
@@ -122,7 +140,7 @@ def substitute_placeholders(string: str, placeholders: dict[str, str]) -> str:
 
 
 def clean_url(url: str | pydantic.HttpUrl) -> str:
-    """Remove protocol, www, and trailing slashes from URL.
+    """Remove protocol and trailing slashes from URL.
 
     Why:
         CV formatting displays cleaner URLs without https:// prefix. Used as
@@ -131,7 +149,7 @@ def clean_url(url: str | pydantic.HttpUrl) -> str:
     Example:
         ```py
         result = clean_url("https://www.example.com/")
-        # Returns: "example.com"
+        # Returns: "www.example.com"
         ```
 
     Args:
@@ -140,8 +158,4 @@ def clean_url(url: str | pydantic.HttpUrl) -> str:
     Returns:
         Clean URL string.
     """
-    url = str(url).replace("https://", "").replace("http://", "")
-    if url.endswith("/"):
-        url = url[:-1]
-
-    return url
+    return str(url).replace("https://", "").replace("http://", "").rstrip("/")

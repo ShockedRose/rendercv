@@ -65,7 +65,7 @@ def get_date_object(date: str | int, current_date: Date | None = None) -> Date:
         Python Date object.
     """
     if isinstance(date, int):
-        date_object = Date.fromisoformat(f"{date}-01-01")
+        date_object = Date(date, 1, 1)
     elif re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
         # Then it is in YYYY-MM-DD format
         date_object = Date.fromisoformat(date)
@@ -76,7 +76,10 @@ def get_date_object(date: str | int, current_date: Date | None = None) -> Date:
         # Then it is in YYYY format
         date_object = Date.fromisoformat(f"{date}-01-01")
     elif date == "present":
-        assert current_date is not None
+        if current_date is None:
+            raise RenderCVInternalError(
+                "current_date is None when processing 'present' date"
+            )
         date_object = current_date
     else:
         raise RenderCVInternalError("This is not a valid date!")

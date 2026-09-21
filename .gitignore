@@ -190,3 +190,11 @@ bin/
 
 # Coverage:
 coverage.md
+
+# MkDocs Material:
+mkdocs-material/
+
+# ATS proof generated artifacts (reproducible via scripts/ats_proof/run_all.py):
+scripts/ats_proof/rendered/
+scripts/ats_proof/results/
+scripts/ats_proof/analysis/

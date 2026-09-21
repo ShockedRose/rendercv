@@ -7,6 +7,8 @@ from typing import Annotated, Any
 import pydantic
 import pydantic_core
 
+from rendercv.exception import RenderCVInternalError
+
 from ...pydantic_error_handling import CustomPydanticErrorTypes
 from ..validation_context import get_input_file_path
 from .built_in_design import BuiltInDesign, built_in_design_adapter
@@ -34,6 +36,9 @@ def validate_design(design: Any, info: pydantic.ValidationInfo) -> Any:
         return built_in_design_adapter.validate_python(design)
     except pydantic.ValidationError as e:
         errors = e.errors()
+        # Detect if validation failed because the theme name doesn't match any
+        # built-in theme. Pydantic's discriminator errors include the discriminator
+        # field name in ctx. This format is tied to Pydantic's error structure:
         custom_theme = False
         for error in errors:
             if (
@@ -92,11 +97,15 @@ def validate_design(design: Any, info: pydantic.ValidationInfo) -> Any:
             "theme",
             path_to_init_file,
         )
-        assert spec is not None
+        if spec is None:
+            msg = f"Failed to load spec from {path_to_init_file}"
+            raise RenderCVInternalError(msg)
 
         theme_module = importlib.util.module_from_spec(spec)
         try:
-            assert spec.loader is not None
+            if spec.loader is None:
+                msg = f"spec.loader is None for {path_to_init_file}"
+                raise RenderCVInternalError(msg)
             spec.loader.exec_module(theme_module)
         except SyntaxError as e:
             raise pydantic_core.PydanticCustomError(

@@ -11,8 +11,8 @@ from ..app import app
 from ..error_handler import handle_user_errors
 from .parse_override_arguments import parse_override_arguments
 from .progress_panel import ProgressPanel
-from .run_rendercv import run_rendercv
-from .watcher import run_function_if_file_changes
+from .run_rendercv import collect_input_file_paths, run_rendercv
+from .watcher import run_function_if_files_change
 
 
 @app.command(
@@ -30,6 +30,17 @@ def cli_command_render(
     input_file_name: Annotated[
         pathlib.Path, typer.Argument(help="The YAML input file.")
     ],
+    output_folder: Annotated[
+        pathlib.Path | None,
+        typer.Option(
+            "--output-folder",
+            "-o",
+            help=(
+                "Base output folder for all generated files. Replaces the default"
+                " 'rendercv_output' folder."
+            ),
+        ),
+    ] = None,
     design: Annotated[
         pathlib.Path | None,
         typer.Option(
@@ -174,9 +185,8 @@ def cli_command_render(
             help="If provided, RenderCV will not print any messages.",
         ),
     ] = False,
-    # This is a dummy argument for the help message for
-    # extra_data_model_override_argumets:
-    _: Annotated[
+    # Dummy argument that only exists to show the override syntax in --help:
+    yaml_field_override: Annotated[  # noqa: ARG001
         str | None,
         typer.Option(
             "--YAMLLOCATION",
@@ -185,11 +195,25 @@ def cli_command_render(
         ),
     ] = None,
     extra_data_model_override_arguments: typer.Context = None,  # ty: ignore[invalid-parameter-default]
-):
+) -> None:
+    input_file_path = pathlib.Path(input_file_name).absolute()
+
+    # Resolve design/locale overlay files from YAML settings when not
+    # provided via CLI flags. collect_input_file_paths already handles
+    # parsing the YAML and resolving paths relative to the input file.
+    resolved_files = collect_input_file_paths(input_file_path, design, locale, settings)
+    if design is None and "design" in resolved_files:
+        design = resolved_files["design"]
+    if locale is None and "locale" in resolved_files:
+        locale = resolved_files["locale"]
+
     arguments: BuildRendercvModelArguments = {
-        "design_file_path_or_contents": design if design else None,
-        "locale_file_path_or_contents": locale if locale else None,
-        "settings_file_path_or_contents": settings if settings else None,
+        "design_yaml_file": design.read_text(encoding="utf-8") if design else None,
+        "locale_yaml_file": locale.read_text(encoding="utf-8") if locale else None,
+        "settings_yaml_file": (
+            settings.read_text(encoding="utf-8") if settings else None
+        ),
+        "output_folder": output_folder,
         "typst_path": typst_path,
         "pdf_path": pdf_path,
         "markdown_path": markdown_path,
@@ -202,12 +226,11 @@ def cli_command_render(
         "dont_generate_png": dont_generate_png,
         "overrides": parse_override_arguments(extra_data_model_override_arguments),
     }
-    input_file_path = pathlib.Path(input_file_name)
 
     with ProgressPanel(quiet=quiet) as progress_panel:
         if watch:
-            run_function_if_file_changes(
-                input_file_path,
+            run_function_if_files_change(
+                list(resolved_files.values()),
                 lambda: run_rendercv(input_file_path, progress_panel, **arguments),
             )
         else:

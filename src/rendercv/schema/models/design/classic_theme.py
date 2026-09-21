@@ -5,20 +5,14 @@ import pydantic
 from rendercv.schema.models.base import BaseModelWithoutExtraKeys
 from rendercv.schema.models.design.color import Color
 from rendercv.schema.models.design.font_family import FontFamily as FontFamilyType
-from rendercv.schema.models.design.typst_dimension import TypstDimension
-
-type Bullet = Literal["●", "•", "◦", "-", "◆", "★", "■", "—", "○"]
-type BodyAlignment = Literal["left", "justified", "justified-with-no-hyphenation"]
-type Alignment = Literal["left", "center", "right"]
-type SectionTitleType = Literal[
-    "with_partial_line", "with_full_line", "without_line", "moderncv"
-]
-type PhoneNumberFormatType = Literal["national", "international", "E164"]
-type PageSize = Literal["a4", "a5", "us-letter", "us-executive"]
-
-length_common_description = (
-    "It can be specified with units (cm, in, pt, mm, ex, em). For example, `0.1cm`."
+from rendercv.schema.models.design.typst_dimension import (
+    TypstDimension,
+    length_common_description,
 )
+
+# Page
+
+type PageSize = Literal["a4", "a5", "us-letter", "us-executive"]
 
 
 class Page(BaseModelWithoutExtraKeys):
@@ -59,6 +53,8 @@ class Page(BaseModelWithoutExtraKeys):
         ),
     )
 
+
+# Colors
 
 color_common_description = (
     "The color can be specified either with their name"
@@ -118,6 +114,12 @@ class Colors(BaseModelWithoutExtraKeys):
         + " The default value is `rgb(128, 128, 128)`.",
         examples=color_common_examples,
     )
+
+
+# Typography
+
+type BodyAlignment = Literal["left", "justified", "justified-with-no-hyphenation"]
+type Alignment = Literal["left", "center", "right"]
 
 
 class FontFamily(BaseModelWithoutExtraKeys):
@@ -302,6 +304,9 @@ class Typography(BaseModelWithoutExtraKeys):
         return FontFamily.model_validate(font_family)
 
 
+# Links
+
+
 class Links(BaseModelWithoutExtraKeys):
     underline: bool = pydantic.Field(
         default=False,
@@ -313,6 +318,11 @@ class Links(BaseModelWithoutExtraKeys):
             "Show an external link icon next to URLs. The default value is `false`."
         ),
     )
+
+
+# Header
+
+type PhoneNumberFormatType = Literal["national", "international", "E164"]
 
 
 class Connections(BaseModelWithoutExtraKeys):
@@ -414,14 +424,32 @@ class Header(BaseModelWithoutExtraKeys):
     )
 
 
+# Section Titles
+
+type SectionTitleType = Literal[
+    "with_partial_line",
+    "with_full_line",
+    "without_line",
+    "moderncv",
+    "centered_without_line",
+    "centered_with_partial_line",
+    "centered_with_centered_partial_line",
+    "centered_with_full_line",
+]
+
+
 class SectionTitles(BaseModelWithoutExtraKeys):
     type: SectionTitleType = pydantic.Field(
         default="with_partial_line",
         description=(
             "Section title visual style. Use 'with_partial_line' for a line next to the"
             " title, 'with_full_line' for a line across the page, 'without_line' for no"
-            " line, or 'moderncv' for the ModernCV style. The default value is"
-            " `with_partial_line`."
+            " line, 'moderncv' for the ModernCV style, 'centered_without_line' for a"
+            " centered title with no line, 'centered_with_partial_line' for a centered"
+            " title with baseline partial lines on both sides,"
+            " 'centered_with_centered_partial_line' for a centered title with"
+            " middle-aligned lines on both sides, or 'centered_with_full_line' for a"
+            " full-width line underneath. The default value is `with_partial_line`."
         ),
     )
     line_thickness: TypstDimension = pydantic.Field(
@@ -436,6 +464,9 @@ class SectionTitles(BaseModelWithoutExtraKeys):
         default="0.3cm",
         description=length_common_description + " The default value is `0.3cm`.",
     )
+
+
+# Sections
 
 
 class Sections(BaseModelWithoutExtraKeys):
@@ -462,14 +493,6 @@ class Sections(BaseModelWithoutExtraKeys):
             + " The default value is `0.3em`."
         ),
     )
-    # page_break_before: list[str] = pydantic.Field(
-    #     default=[],
-    #     description=(
-    #         "Section titles before which a page break should be inserted. The default"
-    #         " value is `[]`."
-    #     ),
-    #     examples=[["Experience"], ["Education"]],
-    # )
     show_time_spans_in: list[str] = pydantic.Field(
         default=["experience"],
         description=(
@@ -479,14 +502,15 @@ class Sections(BaseModelWithoutExtraKeys):
         examples=[["Experience"], ["Experience", "Education"]],
     )
 
-    @pydantic.field_validator(
-        # "page_break_before",
-        "show_time_spans_in",
-        mode="after",
-    )
+    @pydantic.field_validator("show_time_spans_in", mode="after")
     @classmethod
     def convert_section_titles_to_snake_case(cls, value: list[str]) -> list[str]:
         return [section_title.lower().replace(" ", "_") for section_title in value]
+
+
+# Entries
+
+type Bullet = Literal["●", "•", "◦", "-", "◆", "★", "■", "—", "○"]
 
 
 class Summary(BaseModelWithoutExtraKeys):
@@ -590,6 +614,14 @@ class Entries(BaseModelWithoutExtraKeys):
             " value is `true`."
         ),
     )
+    degree_width: TypstDimension = pydantic.Field(
+        default="1cm",
+        description=(
+            "Width of the degree column. "
+            + length_common_description
+            + " The default value is `1cm`."
+        ),
+    )
     summary: Summary = pydantic.Field(
         default_factory=Summary,
         description="Summary text settings.",
@@ -600,7 +632,10 @@ class Entries(BaseModelWithoutExtraKeys):
     )
 
 
-class OneLineEntry(BaseModelWithoutExtraKeys):
+# Templates
+
+
+class OneLineEntryTemplate(BaseModelWithoutExtraKeys):
     main_column: str = pydantic.Field(
         default="**LABEL:** DETAILS",
         description=(
@@ -613,13 +648,15 @@ class OneLineEntry(BaseModelWithoutExtraKeys):
     )
 
 
-class EducationEntry(BaseModelWithoutExtraKeys):
+class EducationEntryTemplate(BaseModelWithoutExtraKeys):
     main_column: str = pydantic.Field(
         default="**INSTITUTION**, AREA\nSUMMARY\nHIGHLIGHTS",
         description=(
             "Template for education entry main column. Available placeholders:\n-"
             " `INSTITUTION`: Institution name\n- `AREA`: Field of study/major\n-"
-            " `DEGREE`: Degree type (e.g., BS, PhD)\n- `SUMMARY`: Summary text\n-"
+            " `DEGREE`: Degree type (e.g., BS, PhD)\n- `DEGREE_WITH_AREA`: Locale-aware"
+            " phrase combining degree and area (e.g., 'BS in Computer Science')\n-"
+            " `SUMMARY`: Summary text\n-"
             " `HIGHLIGHTS`: Bullet points list\n- `LOCATION`: Location text\n- `DATE`:"
             " Formatted date or date range\n\nYou can also add arbitrary keys to"
             " entries and use them as UPPERCASE placeholders.\n\nThe default value is"
@@ -653,7 +690,7 @@ class EducationEntry(BaseModelWithoutExtraKeys):
     )
 
 
-class NormalEntry(BaseModelWithoutExtraKeys):
+class NormalEntryTemplate(BaseModelWithoutExtraKeys):
     main_column: str = pydantic.Field(
         default="**NAME**\nSUMMARY\nHIGHLIGHTS",
         description=(
@@ -677,7 +714,7 @@ class NormalEntry(BaseModelWithoutExtraKeys):
     )
 
 
-class ExperienceEntry(BaseModelWithoutExtraKeys):
+class ExperienceEntryTemplate(BaseModelWithoutExtraKeys):
     main_column: str = pydantic.Field(
         default="**COMPANY**, POSITION\nSUMMARY\nHIGHLIGHTS",
         description=(
@@ -702,7 +739,7 @@ class ExperienceEntry(BaseModelWithoutExtraKeys):
     )
 
 
-class PublicationEntry(BaseModelWithoutExtraKeys):
+class PublicationEntryTemplate(BaseModelWithoutExtraKeys):
     main_column: str = pydantic.Field(
         default="**TITLE**\nSUMMARY\nAUTHORS\nURL (JOURNAL)",
         description=(
@@ -743,6 +780,8 @@ class Templates(BaseModelWithoutExtraKeys):
             "- `MONTH_ABBREVIATION`: Abbreviated month name (e.g., Jan)\n"
             "- `MONTH`: Month number (e.g., 1)\n"
             "- `MONTH_IN_TWO_DIGITS`: Zero-padded month (e.g., 01)\n"
+            "- `DAY`: Day of the month (e.g., 5)\n"
+            "- `DAY_IN_TWO_DIGITS`: Zero-padded day (e.g., 05)\n"
             "- `YEAR`: Full year (e.g., 2025)\n"
             "- `YEAR_IN_TWO_DIGITS`: Two-digit year (e.g., 25)\n\n"
             "The default value is `*NAME -- PAGE_NUMBER/TOTAL_PAGES*`."
@@ -757,9 +796,10 @@ class Templates(BaseModelWithoutExtraKeys):
             " `NAME`: The CV owner's name from `cv.name`\n- `MONTH_NAME`: Full month"
             " name (e.g., January)\n- `MONTH_ABBREVIATION`: Abbreviated month name"
             " (e.g., Jan)\n- `MONTH`: Month number (e.g., 1)\n- `MONTH_IN_TWO_DIGITS`:"
-            " Zero-padded month (e.g., 01)\n- `YEAR`: Full year (e.g., 2025)\n-"
-            " `YEAR_IN_TWO_DIGITS`: Two-digit year (e.g., 25)\n\nThe default value is"
-            " `*LAST_UPDATED CURRENT_DATE*`."
+            " Zero-padded month (e.g., 01)\n- `DAY`: Day of the month (e.g., 5)\n-"
+            " `DAY_IN_TWO_DIGITS`: Zero-padded day (e.g., 05)\n- `YEAR`: Full year"
+            " (e.g., 2025)\n- `YEAR_IN_TWO_DIGITS`: Two-digit year (e.g., 25)\n\n"
+            "The default value is `*LAST_UPDATED CURRENT_DATE*`."
         ),
     )
     single_date: str = pydantic.Field(
@@ -770,6 +810,8 @@ class Templates(BaseModelWithoutExtraKeys):
             "- `MONTH_ABBREVIATION`: Abbreviated month name (e.g., Jan)\n"
             "- `MONTH`: Month number (e.g., 1)\n"
             "- `MONTH_IN_TWO_DIGITS`: Zero-padded month (e.g., 01)\n"
+            "- `DAY`: Day of the month (e.g., 5)\n"
+            "- `DAY_IN_TWO_DIGITS`: Zero-padded day (e.g., 05)\n"
             "- `YEAR`: Full year (e.g., 2025)\n"
             "- `YEAR_IN_TWO_DIGITS`: Two-digit year (e.g., 25)\n\n"
             "The default value is `MONTH_ABBREVIATION YEAR`."
@@ -796,26 +838,29 @@ class Templates(BaseModelWithoutExtraKeys):
             " value is `HOW_MANY_YEARS YEARS HOW_MANY_MONTHS MONTHS`."
         ),
     )
-    one_line_entry: OneLineEntry = pydantic.Field(
-        default_factory=OneLineEntry,
+    one_line_entry: OneLineEntryTemplate = pydantic.Field(
+        default_factory=OneLineEntryTemplate,
         description="Template for one-line entries.",
     )
-    education_entry: EducationEntry = pydantic.Field(
-        default_factory=EducationEntry,
+    education_entry: EducationEntryTemplate = pydantic.Field(
+        default_factory=EducationEntryTemplate,
         description="Template for education entries.",
     )
-    normal_entry: NormalEntry = pydantic.Field(
-        default_factory=NormalEntry,
+    normal_entry: NormalEntryTemplate = pydantic.Field(
+        default_factory=NormalEntryTemplate,
         description="Template for normal entries.",
     )
-    experience_entry: ExperienceEntry = pydantic.Field(
-        default_factory=ExperienceEntry,
+    experience_entry: ExperienceEntryTemplate = pydantic.Field(
+        default_factory=ExperienceEntryTemplate,
         description="Template for experience entries.",
     )
-    publication_entry: PublicationEntry = pydantic.Field(
-        default_factory=PublicationEntry,
+    publication_entry: PublicationEntryTemplate = pydantic.Field(
+        default_factory=PublicationEntryTemplate,
         description="Template for publication entries.",
     )
+
+
+# ClassicTheme
 
 
 class ClassicTheme(BaseModelWithoutExtraKeys):

@@ -46,10 +46,11 @@
         - December
     ```
 
-3. Add ISO 639-1 language code to `english_locale.py`
+3. Add ISO 639-1 language code and flag emoji to `english_locale.py`
 
-    Edit `src/rendercv/schema/models/locale/english_locale.py` line 95-108:
+    Edit `src/rendercv/schema/models/locale/english_locale.py` and add your language to both mappings:
 
+    In `language_iso_639_1`:
     ```python
     return {
         "english": "en",
@@ -58,7 +59,24 @@
     }[self.language]
     ```
 
-4. Done. Use it:
+    In `flag_emoji`:
+    ```python
+    country = {
+        "english": "GB",
+        # ... existing languages
+        "mylanguage": "XX",  # Add your two-letter ISO 3166-1 country code
+    }[self.language]
+    ```
+
+4. Update the JSON Schema
+
+    ```bash
+    just update-schema
+    ```
+
+    This regenerates `schema.json` so that editors can provide autocomplete and validation for the new locale. See [JSON Schema](../json_schema.md) for details.
+
+5. Done. Use it:
 
     ```bash
     rendercv new "John Doe" --locale mylanguage

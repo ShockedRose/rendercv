@@ -20,13 +20,18 @@ def validate_typst_dimension(dimension: str) -> str:
     Returns:
         Original dimension if valid.
     """
-    if not re.fullmatch(r"-?\d+(?:\.\d+)?(cm|in|pt|mm|ex|em)", dimension):
+    # Negative dimensions are valid in Typst for negative spacing/offsets:
+    if not re.fullmatch(r"-?\d+(?:\.\d+)?(cm|in|pt|mm|em)", dimension):
         raise pydantic_core.PydanticCustomError(
             CustomPydanticErrorTypes.other.value,
-            "The value must be a number followed by a unit (cm, in, pt, mm, ex, em)."
+            "The value must be a number followed by a unit (cm, in, pt, mm, em)."
             " For example, 0.1cm.",
         )
     return dimension
 
 
 type TypstDimension = Annotated[str, pydantic.AfterValidator(validate_typst_dimension)]
+
+length_common_description = (
+    "It can be specified with units (cm, in, pt, mm, em). For example, `0.1cm`."
+)

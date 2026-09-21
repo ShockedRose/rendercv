@@ -14,6 +14,84 @@ from .string_processor import clean_url, substitute_placeholders
 uppercase_word_pattern = re.compile(r"\b[A-Z_]+\b")
 
 
+# Matches a bare connector word between placeholders: starts with a non-uppercase
+# Unicode letter, followed by any non-whitespace chars. Surrounded by whitespace
+# so formatting like "*in*" and punctuation-only separators like "--" are skipped.
+connector_word_pattern = re.compile(r"(?<=\s)(?![A-Z])[^\W\d_]\S*(?=\s)")
+
+
+def remove_connectors_of_missing_placeholders(
+    template: str, not_provided_placeholders: set[str]
+) -> str:
+    """Remove connector words between placeholders when an adjacent placeholder is missing.
+
+    Why:
+        Templates contain connector words between placeholders (e.g., "in" between
+        DEGREE and AREA, "at" between JOB_TITLE and COMPANY). When a placeholder is
+        removed, these connectors must be dropped too — otherwise orphaned words like
+        "in Computer Science" or "Engineer at" appear in the output.
+
+    Example:
+        ```py
+        # "in" removed because DEGREE is missing
+        remove_connectors_of_missing_placeholders(
+            "**INSTITUTION**, DEGREE in AREA", {"DEGREE"}
+        )
+        # Returns: "**INSTITUTION**, DEGREE  AREA"
+
+        # "at" removed because COMPANY_NAME is missing
+        remove_connectors_of_missing_placeholders(
+            "**JOB_TITLE** at COMPANY_NAME", {"COMPANY_NAME"}
+        )
+        # Returns: "**JOB_TITLE**  COMPANY_NAME"
+        ```
+
+    Args:
+        template: Template string with uppercase placeholders and connector text.
+        not_provided_placeholders: Set of placeholder names that are missing.
+
+    Returns:
+        Template with connector words adjacent to missing placeholders removed.
+    """
+    tokens = re.split(r"(\b[A-Z_]+\b)", template)
+
+    for i, token in enumerate(tokens):
+        if uppercase_word_pattern.fullmatch(token):
+            continue
+
+        # Find the nearest placeholder on each side of this separator
+        prev_ph = next(
+            (
+                tokens[j]
+                for j in range(i - 1, -1, -1)
+                if uppercase_word_pattern.fullmatch(tokens[j])
+            ),
+            None,
+        )
+        next_ph = next(
+            (
+                tokens[j]
+                for j in range(i + 1, len(tokens))
+                if uppercase_word_pattern.fullmatch(tokens[j])
+            ),
+            None,
+        )
+
+        # Only strip connectors from separators between two placeholders
+        # where at least one side is missing:
+        if (
+            prev_ph is not None
+            and next_ph is not None
+            and (
+                prev_ph in not_provided_placeholders
+                or next_ph in not_provided_placeholders
+            )
+        ):
+            tokens[i] = connector_word_pattern.sub("", token)
+
+    return "".join(tokens)
+
+
 def render_entry_templates[EntryType: Entry](
     entry: EntryType,
     *,
@@ -47,19 +125,37 @@ def render_entry_templates[EntryType: Entry](
         templates, entry.entry_type_in_snake_case
     ).model_dump(exclude_none=True)
 
-    entry_fields: dict[str, str | str] = {
+    entry_fields: dict[str, str] = {
         key.upper(): value for key, value in entry.model_dump(exclude_none=True).items()
     }
+
+    # Treat empty-string values as not provided so their surrounding
+    # formatting characters (like ** for bold, commas) are cleaned up:
+    entry_fields = {k: v for k, v in entry_fields.items() if v != ""}
+
+    # Expand locale phrases into templates by replacing phrase placeholders
+    # (e.g., DEGREE_WITH_AREA) with their locale-specific template text
+    # (e.g., "DEGREE in AREA" for English, "DEGREE en AREA" for French).
+    # The sub-placeholders (DEGREE, AREA) remain as normal placeholders for the
+    # rest of the pipeline to handle, preserving identical behavior for English.
+    for phrase_name, phrase_template in locale.phrases.model_dump().items():
+        phrase_placeholder = phrase_name.upper()
+        entry_templates = {
+            key: template.replace(phrase_placeholder, phrase_template)
+            for key, template in entry_templates.items()
+        }
 
     # Handle special placeholders:
     if "HIGHLIGHTS" in entry_fields:
         highlights = getattr(entry, "highlights", None)
-        assert highlights is not None
+        if highlights is None:
+            raise RenderCVInternalError("HIGHLIGHTS in fields but highlights is None")
         entry_fields["HIGHLIGHTS"] = process_highlights(highlights)
 
     if "AUTHORS" in entry_fields:
         authors = getattr(entry, "authors", None)
-        assert authors is not None
+        if authors is None:
+            raise RenderCVInternalError("AUTHORS in fields but authors is None")
         entry_fields["AUTHORS"] = process_authors(authors)
 
     if (
@@ -81,7 +177,8 @@ def render_entry_templates[EntryType: Entry](
 
     if "START_DATE" in entry_fields:
         start_date = getattr(entry, "start_date", None)
-        assert start_date is not None
+        if start_date is None:
+            raise RenderCVInternalError("START_DATE in fields but start_date is None")
         entry_fields["START_DATE"] = format_single_date(
             start_date,
             locale=locale,
@@ -90,7 +187,8 @@ def render_entry_templates[EntryType: Entry](
 
     if "END_DATE" in entry_fields:
         end_date = getattr(entry, "end_date", None)
-        assert end_date is not None
+        if end_date is None:
+            raise RenderCVInternalError("END_DATE in fields but end_date is None")
         entry_fields["END_DATE"] = format_single_date(
             end_date,
             locale=locale,
@@ -98,14 +196,23 @@ def render_entry_templates[EntryType: Entry](
         )
 
     if "URL" in entry_fields:
+        # entry is guaranteed to be an EntryModel (not str) here because str entries
+        # have no URL field. The ty:ignore is due to Entry = EntryModel | str union.
         entry_fields["URL"] = process_url(entry)  # ty: ignore[invalid-argument-type]
 
     if "DOI" in entry_fields:
+        # Same as above: entry is an EntryModel with doi/url fields.
         entry_fields["URL"] = process_url(entry)  # ty: ignore[invalid-argument-type]
         entry_fields["DOI"] = process_doi(entry)  # ty: ignore[invalid-argument-type]
 
     if "SUMMARY" in entry_fields:
-        entry_fields["SUMMARY"] = process_summary(entry_fields["SUMMARY"])
+        summary_is_standalone = any(
+            line.strip() == "SUMMARY"
+            for template in entry_templates.values()
+            for line in template.split("\n")
+        )
+        if summary_is_standalone:
+            entry_fields["SUMMARY"] = process_summary(entry_fields["SUMMARY"])
 
     entry_templates = remove_not_provided_placeholders(entry_templates, entry_fields)
 
@@ -269,8 +376,8 @@ def process_url(entry: Entry) -> str:
     if isinstance(entry, PublicationEntry) and entry.doi:
         return process_doi(entry)
     if hasattr(entry, "url") and entry.url:
-        url = entry.url
-        return f"[{clean_url(url)}]({url})"  # ty: ignore[invalid-argument-type]
+        url = str(entry.url)
+        return f"[{clean_url(url)}]({url})"
     raise RenderCVInternalError("URL is not provided for this entry.")
 
 
@@ -343,18 +450,36 @@ def remove_not_provided_placeholders(
     """
     # Remove the not provided placeholders from the templates, including characters
     # around them:
-    used_placeholders_in_templates = set(
+    used_placeholders_in_templates: set[str] = set(
         uppercase_word_pattern.findall(" ".join(entry_templates.values()))
     )
-    not_provided_placeholders = used_placeholders_in_templates - set(
+    not_provided_placeholders: set[str] = used_placeholders_in_templates - set(
         entry_fields.keys()
     )
     if not_provided_placeholders:
+        # First, remove connector words (like "in", "at") between placeholders
+        # where at least one side is missing:
+        entry_templates = {
+            key: re.sub(
+                r" {2,}",
+                " ",
+                remove_connectors_of_missing_placeholders(
+                    value, not_provided_placeholders
+                ),
+            )
+            for key, value in entry_templates.items()
+        }
+
+        # Then remove the placeholders themselves and adjacent non-space chars.
+        # Sort longest-first so e.g. "AAA" matches before "AA":
+        sorted_placeholders = sorted(not_provided_placeholders, key=len, reverse=True)
         not_provided_placeholders_pattern = re.compile(
-            r"\S*(?:" + "|".join(not_provided_placeholders) + r")\S*"
+            r"\S*\b(?:" + "|".join(sorted_placeholders) + r")\b\S*"  # ty: ignore[no-matching-overload]
         )
         entry_templates = {
-            key: clean_trailing_parts(not_provided_placeholders_pattern.sub("", value))
+            key: clean_trailing_parts(
+                re.sub(r" {2,}", " ", not_provided_placeholders_pattern.sub("", value))
+            )
             for key, value in entry_templates.items()
         }
 

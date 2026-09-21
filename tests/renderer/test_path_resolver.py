@@ -2,10 +2,17 @@ import datetime
 import pathlib
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
-from rendercv.renderer.path_resolver import resolve_rendercv_file_path
+from rendercv.renderer.path_resolver import (
+    build_name_variants,
+    resolve_output_folder_placeholder,
+    resolve_rendercv_file_path,
+)
 from rendercv.schema.models.cv.cv import Cv
 from rendercv.schema.models.rendercv_model import RenderCVModel
+from rendercv.schema.models.settings.render_command import RenderCommand
 from rendercv.schema.models.settings.settings import Settings
 
 
@@ -65,6 +72,9 @@ class TestResolveRendercvFilePath:
                 datetime.date(2024, 12, 1),
                 "Dec.pdf",
             ),
+            # Day placeholders
+            ("DAY.pdf", "John Doe", datetime.date(2024, 3, 15), "15.pdf"),
+            ("DAY_IN_TWO_DIGITS.pdf", "John Doe", datetime.date(2024, 3, 5), "05.pdf"),
             # Multiple placeholders
             (
                 "NAME_IN_SNAKE_CASE_CV_YEAR-MONTH_IN_TWO_DIGITS.pdf",
@@ -106,3 +116,180 @@ class TestResolveRendercvFilePath:
 
         assert result.parent.exists()
         assert result == nested_dir / "John_Doe_CV.pdf"
+
+    def test_output_folder_placeholder_resolved(self, tmp_path: pathlib.Path):
+        output_folder = tmp_path / "rendercv_output"
+        model = RenderCVModel(
+            cv=Cv(name="John Doe"),
+            settings=Settings(
+                render_command=RenderCommand(output_folder=output_folder)
+            ),
+        )
+        file_path = tmp_path / "OUTPUT_FOLDER" / "NAME_IN_SNAKE_CASE_CV.pdf"
+
+        result = resolve_rendercv_file_path(model, file_path)
+
+        assert result == output_folder / "John_Doe_CV.pdf"
+        assert result.parent.exists()
+
+    def test_custom_output_folder(self, tmp_path: pathlib.Path):
+        output_folder = tmp_path / "build" / "en"
+        model = RenderCVModel(
+            cv=Cv(name="John Doe"),
+            settings=Settings(
+                render_command=RenderCommand(output_folder=output_folder)
+            ),
+        )
+        file_path = tmp_path / "OUTPUT_FOLDER" / "NAME_IN_SNAKE_CASE_CV.pdf"
+
+        result = resolve_rendercv_file_path(model, file_path)
+
+        assert result == output_folder / "John_Doe_CV.pdf"
+
+    def test_no_output_folder_placeholder_in_path(self, tmp_path: pathlib.Path):
+        output_folder = tmp_path / "build"
+        model = RenderCVModel(
+            cv=Cv(name="John Doe"),
+            settings=Settings(
+                render_command=RenderCommand(output_folder=output_folder)
+            ),
+        )
+        file_path = tmp_path / "custom_dir" / "NAME_IN_SNAKE_CASE_CV.pdf"
+
+        result = resolve_rendercv_file_path(model, file_path)
+
+        assert result == tmp_path / "custom_dir" / "John_Doe_CV.pdf"
+
+    def test_output_folder_with_subdirectory_in_path(self, tmp_path: pathlib.Path):
+        output_folder = tmp_path / "build"
+        model = RenderCVModel(
+            cv=Cv(name="John Doe"),
+            settings=Settings(
+                render_command=RenderCommand(output_folder=output_folder)
+            ),
+        )
+        file_path = tmp_path / "OUTPUT_FOLDER" / "typst" / "NAME_IN_SNAKE_CASE_CV.typ"
+
+        result = resolve_rendercv_file_path(model, file_path)
+
+        assert result == output_folder / "typst" / "John_Doe_CV.typ"
+
+
+class TestResolveOutputFolderPlaceholder:
+    def test_replaces_output_folder_component(self, tmp_path: pathlib.Path):
+        output_folder = tmp_path / "my_output"
+        file_path = tmp_path / "OUTPUT_FOLDER" / "file.pdf"
+
+        result = resolve_output_folder_placeholder(file_path, output_folder)
+
+        assert result == output_folder / "file.pdf"
+
+    def test_no_placeholder_returns_unchanged(self, tmp_path: pathlib.Path):
+        output_folder = tmp_path / "my_output"
+        file_path = tmp_path / "some_dir" / "file.pdf"
+
+        result = resolve_output_folder_placeholder(file_path, output_folder)
+
+        assert result == file_path
+
+    def test_nested_output_folder(self, tmp_path: pathlib.Path):
+        output_folder = tmp_path / "build" / "en"
+        file_path = tmp_path / "OUTPUT_FOLDER" / "sub" / "file.pdf"
+
+        result = resolve_output_folder_placeholder(file_path, output_folder)
+
+        assert result == output_folder / "sub" / "file.pdf"
+
+    def test_output_folder_only(self, tmp_path: pathlib.Path):
+        output_folder = tmp_path / "build"
+        file_path = tmp_path / "OUTPUT_FOLDER"
+
+        result = resolve_output_folder_placeholder(file_path, output_folder)
+
+        assert result == output_folder
+
+    @settings(deadline=None)
+    @given(
+        suffix=st.from_regex(r"[a-z_]{1,10}", fullmatch=True),
+        folder=st.from_regex(r"[a-z_]{1,10}", fullmatch=True),
+    )
+    def test_idempotent(self, suffix: str, folder: str) -> None:
+        path = pathlib.PurePosixPath(f"/base/OUTPUT_FOLDER/{suffix}")
+        output_folder = pathlib.PurePosixPath(f"/base/{folder}")
+        first = resolve_output_folder_placeholder(
+            pathlib.Path(path), pathlib.Path(output_folder)
+        )
+        second = resolve_output_folder_placeholder(first, pathlib.Path(output_folder))
+        assert first == second
+
+    @settings(deadline=None)
+    @given(
+        suffix=st.from_regex(r"[a-z_]{1,10}", fullmatch=True),
+        folder=st.from_regex(r"[a-z_]{1,10}", fullmatch=True),
+    )
+    def test_output_folder_absent_in_result(self, suffix: str, folder: str) -> None:
+        path = pathlib.PurePosixPath(f"/base/OUTPUT_FOLDER/{suffix}")
+        output_folder = pathlib.PurePosixPath(f"/base/{folder}")
+        result = resolve_output_folder_placeholder(
+            pathlib.Path(path), pathlib.Path(output_folder)
+        )
+        assert "OUTPUT_FOLDER" not in result.parts
+
+
+class TestBuildNameVariants:
+    def test_none_returns_empty_dict(self) -> None:
+        assert build_name_variants(None) == {}
+
+    @settings(deadline=None)
+    @given(name=st.text(min_size=1, max_size=50))
+    def test_always_7_keys(self, name: str) -> None:
+        result = build_name_variants(name)
+        assert len(result) == 7
+
+    @settings(deadline=None)
+    @given(name=st.text(min_size=1, max_size=50))
+    def test_snake_case_has_no_spaces(self, name: str) -> None:
+        result = build_name_variants(name)
+        assert " " not in result["NAME_IN_SNAKE_CASE"]
+        assert " " not in result["NAME_IN_LOWER_SNAKE_CASE"]
+        assert " " not in result["NAME_IN_UPPER_SNAKE_CASE"]
+
+    @settings(deadline=None)
+    @given(name=st.text(min_size=1, max_size=50))
+    def test_kebab_case_has_no_spaces(self, name: str) -> None:
+        result = build_name_variants(name)
+        assert " " not in result["NAME_IN_KEBAB_CASE"]
+        assert " " not in result["NAME_IN_LOWER_KEBAB_CASE"]
+        assert " " not in result["NAME_IN_UPPER_KEBAB_CASE"]
+
+    @settings(deadline=None)
+    @given(name=st.text(min_size=1, max_size=50))
+    def test_lower_variants_are_lowercase(self, name: str) -> None:
+        result = build_name_variants(name)
+        assert (
+            result["NAME_IN_LOWER_SNAKE_CASE"]
+            == result["NAME_IN_LOWER_SNAKE_CASE"].lower()
+        )
+        assert (
+            result["NAME_IN_LOWER_KEBAB_CASE"]
+            == result["NAME_IN_LOWER_KEBAB_CASE"].lower()
+        )
+
+    @settings(deadline=None)
+    @given(name=st.text(min_size=1, max_size=50))
+    def test_upper_variants_are_uppercase(self, name: str) -> None:
+        result = build_name_variants(name)
+        assert (
+            result["NAME_IN_UPPER_SNAKE_CASE"]
+            == result["NAME_IN_UPPER_SNAKE_CASE"].upper()
+        )
+        assert (
+            result["NAME_IN_UPPER_KEBAB_CASE"]
+            == result["NAME_IN_UPPER_KEBAB_CASE"].upper()
+        )
+
+    @settings(deadline=None)
+    @given(name=st.text(min_size=1, max_size=50))
+    def test_original_name_preserved(self, name: str) -> None:
+        result = build_name_variants(name)
+        assert result["NAME"] == name
